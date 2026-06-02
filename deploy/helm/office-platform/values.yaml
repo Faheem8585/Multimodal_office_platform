@@ -1,0 +1,78 @@
+# Default values for office-platform.
+# Postgres (with pgvector) and Redis are expected to be provided externally
+# (managed services or in-cluster operators). Supply their URLs via `secrets`.
+
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  registry: ghcr.io/your-org
+  apiRepository: office-platform-backend
+  frontendRepository: office-platform-frontend
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+api:
+  replicas: 3
+  resources:
+    requests: { cpu: "250m", memory: "512Mi" }
+    limits: { cpu: "1", memory: "1Gi" }
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 75
+  env:
+    WEB_CONCURRENCY: "4"
+
+worker:
+  replicas: 2
+  concurrency: 4
+  resources:
+    requests: { cpu: "500m", memory: "1Gi" }
+    limits: { cpu: "2", memory: "2Gi" }
+
+frontend:
+  replicas: 2
+  resources:
+    requests: { cpu: "50m", memory: "64Mi" }
+    limits: { cpu: "200m", memory: "128Mi" }
+
+# Non-secret config (12-factor). Rendered into a ConfigMap.
+config:
+  ENVIRONMENT: prod
+  LOG_LEVEL: INFO
+  S3_BUCKET: office-documents
+  S3_REGION: us-east-1
+  LLM_PROVIDER: anthropic
+  LLM_MODEL: claude-opus-4-8
+
+# Secrets. In real deployments DO NOT commit these — supply via
+# `--set-string` from a secrets manager, or use an ExternalSecret. Rendered
+# into a Kubernetes Secret consumed as env vars.
+secrets:
+  JWT_SECRET: ""
+  DATABASE_URL: ""        # postgresql+asyncpg://user:pass@host:5432/db
+  REDIS_URL: ""           # redis://host:6379/0
+  S3_ENDPOINT_URL: ""     # empty => AWS default endpoint
+  S3_ACCESS_KEY: ""
+  S3_SECRET_KEY: ""
+  ANTHROPIC_API_KEY: ""
+  SENTRY_DSN: ""
+
+# Run alembic migrations as a pre-install/pre-upgrade hook job.
+migrations:
+  enabled: true
+
+ingress:
+  enabled: true
+  className: nginx
+  host: office.example.com
+  tls:
+    enabled: true
+    secretName: office-platform-tls
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "30m"
+
+serviceMonitor:
+  enabled: false  # set true if using the Prometheus operator

@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "office.fullname" . }}-worker
+  labels:
+    {{- include "office.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  replicas: {{ .Values.worker.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        {{- include "office.labels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+    spec:
+      containers:
+        - name: worker
+          image: {{ include "office.apiImage" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - celery
+            - -A
+            - app.workers.celery_app.celery_app
+            - worker
+            - --loglevel=info
+            - --concurrency={{ .Values.worker.concurrency }}
+          envFrom:
+            {{- include "office.envFrom" . | nindent 12 }}
+          livenessProbe:
+            exec:
+              command: ["celery", "-A", "app.workers.celery_app.celery_app", "inspect", "ping", "-d", "celery@$(hostname)"]
+            initialDelaySeconds: 30
+            periodSeconds: 60
+            timeoutSeconds: 10
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}

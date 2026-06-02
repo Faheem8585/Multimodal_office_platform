@@ -1,0 +1,159 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend-quality:
+    name: Backend lint & type-check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dev tooling
+        run: pip install ruff black mypy
+      - run: ruff check app tests
+      - run: black --check app tests
+      - name: mypy
+        env:
+          JWT_SECRET: ci-type-check-secret-1234567890
+        run: |
+          pip install -e .
+          mypy app
+
+  backend-tests:
+    name: Backend tests (pytest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: office
+          POSTGRES_PASSWORD: office
+          POSTGRES_DB: office
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U office" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      ENVIRONMENT: dev
+      JWT_SECRET: ci-test-secret-key-1234567890
+      DATABASE_URL: postgresql+asyncpg://office:office@localhost:5432/office
+      REDIS_URL: redis://localhost:6379/0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install OCR system deps
+        run: sudo apt-get update && sudo apt-get install -y tesseract-ocr
+      - name: Install package (without heavy ML extras)
+        run: |
+          pip install -e .
+          pip install pytest pytest-asyncio pytest-cov factory-boy httpx aiosqlite
+      - name: Apply migrations
+        run: alembic upgrade head
+      - name: Run tests (unit + integration + e2e)
+        run: pytest -q
+
+  frontend:
+    name: Frontend lint, type-check & build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci || npm install
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run build
+
+  security:
+    name: Security scans
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: pip-audit (Python deps)
+        working-directory: backend
+        run: |
+          pip install pip-audit
+          pip install -e ".[full]"
+          # Report-only by default; remove '|| true' to gate the build on CVEs.
+          pip-audit || true
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "0"  # report only; flip to 1 to gate
+
+  helm-lint:
+    name: Helm chart lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.15.2
+      - name: Lint & render
+        run: |
+          helm lint deploy/helm/office-platform
+          helm template test deploy/helm/office-platform \
+            --set secrets.JWT_SECRET=ci \
+            --set secrets.DATABASE_URL=postgresql+asyncpg://u:p@h/d \
+            --set secrets.REDIS_URL=redis://h:6379/0 > /dev/null
+
+  docker-build:
+    name: Build images
+    runs-on: ubuntu-latest
+    needs: [backend-quality, frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Build backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

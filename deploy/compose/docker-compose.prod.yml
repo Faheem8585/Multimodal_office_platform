@@ -1,0 +1,75 @@
+# Single-host production deployment via Docker Compose.
+#
+# Prereqs: a populated .env file in this directory (copy ../../.env.example).
+# Usage:
+#   docker compose -f docker-compose.prod.yml --env-file .env up -d --build
+#
+# TLS termination is expected in front (e.g. a host nginx / Caddy / cloud LB).
+# Postgres + Redis run as containers here for a self-contained single host; for
+# higher tiers point DATABASE_URL / REDIS_URL at managed services and drop them.
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: always
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: ../../backend
+    restart: always
+    entrypoint: ["./scripts/entrypoint.sh"]
+    env_file: .env
+    environment:
+      SEED_ON_START: "true"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    expose:
+      - "8000"
+
+  worker:
+    build: ../../backend
+    restart: always
+    command: ["celery", "-A", "app.workers.celery_app.celery_app", "worker", "--loglevel=info", "--concurrency=4"]
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  frontend:
+    build: ../../frontend
+    restart: always
+    ports:
+      - "80:80"
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
+  redisdata:
