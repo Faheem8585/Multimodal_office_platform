@@ -108,17 +108,18 @@ jobs:
         working-directory: backend
         run: |
           pip install pip-audit
-          pip install -e ".[full]"
+          # Audit the core runtime deps (fast; avoids a multi-GB ML install in CI).
+          pip install -e .
           # Report-only by default; remove '|| true' to gate the build on CVEs.
           pip-audit || true
+      - name: Install Trivy
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+            | sh -s -- -b "$RUNNER_TEMP/bin"
       - name: Trivy filesystem scan
-        uses: aquasecurity/trivy-action@0.24.0
-        with:
-          scan-type: fs
-          scan-ref: .
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          exit-code: "0"  # report only; flip to 1 to gate
+        run: |
+          "$RUNNER_TEMP/bin/trivy" fs --scanners vuln,secret,misconfig \
+            --severity CRITICAL,HIGH --ignore-unfixed --exit-code 0 .
 
   helm-lint:
     name: Helm chart lint
