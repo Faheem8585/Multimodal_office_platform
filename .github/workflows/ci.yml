@@ -9,6 +9,10 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Run JS-based actions on Node 24 (Node 20 is being deprecated on runners).
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   backend-quality:
     name: Backend lint & type-check

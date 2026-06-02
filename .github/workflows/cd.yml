@@ -1,0 +1,121 @@
+name: CD
+
+# Continuous delivery: build and publish container images to GitHub Container
+# Registry (GHCR) on every push to main and on version tags. A manual,
+# environment-gated job can then roll those images out to a cluster via Helm.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image tag to deploy (e.g. latest or sha-xxxxxxx)"
+        default: latest
+
+concurrency:
+  group: cd-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  build-and-push:
+    name: Build & push images (GHCR)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # GHCR requires a lowercase image path; derive it from the repo name.
+      - id: img
+        run: echo "base=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # --- Backend image ---
+      - id: meta-backend
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.img.outputs.base }}-backend
+          tags: |
+            type=sha
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable={{is_default_branch}}
+      - uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          push: true
+          tags: ${{ steps.meta-backend.outputs.tags }}
+          labels: ${{ steps.meta-backend.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # --- Frontend image ---
+      - id: meta-frontend
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.img.outputs.base }}-frontend
+          tags: |
+            type=sha
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable={{is_default_branch}}
+      - uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          push: true
+          tags: ${{ steps.meta-frontend.outputs.tags }}
+          labels: ${{ steps.meta-frontend.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: Deploy to Kubernetes (manual)
+    # Only runs on a manual dispatch; never on normal pushes, so the pipeline
+    # stays green without a live cluster. Configure the secrets below to enable.
+    if: github.event_name == 'workflow_dispatch'
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - id: kc
+        run: |
+          if [ -n "${{ secrets.KUBE_CONFIG }}" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.kc.outputs.ready == 'false'
+        run: echo "::warning::No KUBE_CONFIG secret set — skipping cluster deploy. Add a base64-encoded kubeconfig (and JWT_SECRET/DATABASE_URL/REDIS_URL) to enable."
+      - if: steps.kc.outputs.ready == 'true'
+        uses: azure/setup-helm@v4
+      - name: helm upgrade --install
+        if: steps.kc.outputs.ready == 'true'
+        run: |
+          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > "$RUNNER_TEMP/kubeconfig"
+          export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
+          owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
+          repo=$(echo '${{ github.event.repository.name }}' | tr '[:upper:]' '[:lower:]')
+          helm upgrade --install office deploy/helm/office-platform \
+            --namespace office --create-namespace \
+            --set image.registry="ghcr.io/${owner}" \
+            --set image.apiRepository="${repo}-backend" \
+            --set image.frontendRepository="${repo}-frontend" \
+            --set image.tag="${{ inputs.image_tag }}" \
+            --set-string secrets.JWT_SECRET="${{ secrets.JWT_SECRET }}" \
+            --set-string secrets.DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+            --set-string secrets.REDIS_URL="${{ secrets.REDIS_URL }}" \
+            --wait --timeout 5m

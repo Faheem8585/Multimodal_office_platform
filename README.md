@@ -299,6 +299,10 @@ for the frontend — all run in CI on every push ([.github/workflows/ci.yml](.gi
 Both are documented step-by-step — with rollback and backup/restore — in the
 **[Operations Runbook](deploy/runbook.md)**.
 
+**CI/CD** (GitHub Actions):
+- **CI** ([ci.yml](.github/workflows/ci.yml)) — on every push/PR: ruff + black + mypy, the pytest suite against real Postgres + pgvector + Redis, frontend lint/type-check/build, a Trivy + pip-audit security scan, Helm lint, and a Docker image build.
+- **CD** ([cd.yml](.github/workflows/cd.yml)) — on push to `main` and version tags: builds and publishes versioned **backend + frontend images to GHCR**, then offers a manual, environment-gated **Helm deploy** to a cluster.
+
 ## Security & hardening
 
 Implemented: input validation (Pydantic), parameterized queries (SQLAlchemy),
