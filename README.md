@@ -1,5 +1,11 @@
 # Office Platform
 
+[![CI](https://github.com/Faheem8585/Multimodal_office_platform/actions/workflows/ci.yml/badge.svg)](https://github.com/Faheem8585/Multimodal_office_platform/actions/workflows/ci.yml)
+[![CD](https://github.com/Faheem8585/Multimodal_office_platform/actions/workflows/cd.yml/badge.svg)](https://github.com/Faheem8585/Multimodal_office_platform/actions/workflows/cd.yml)
+![Python](https://img.shields.io/badge/python-3.11%2B-blue)
+![TypeScript](https://img.shields.io/badge/TypeScript-React%2018-3178c6)
+![Docker](https://img.shields.io/badge/Docker-Compose%20%2B%20Helm-2496ed)
+
 A multimodal **internal platform** that gives an organization's departments
 (HR, Finance, IT, …) a single hub to manage workflows, documents, and
 communications — with role-aware dashboards, a configurable approval engine,
